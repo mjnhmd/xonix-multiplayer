@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>XONIX MULTIPLAYER</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-void: #08080f;
+      --bg-grid: #0d0d1a;
+      --border-zone: #1a1a2a;
+      --neon-cyan: #00f0ff;
+      --neon-pink: #ff2d95;
+      --neon-green: #39ff14;
+      --neon-amber: #ffab00;
+      --panel-bg: rgba(8, 8, 15, 0.92);
+      --panel-border: rgba(0, 240, 255, 0.15);
+      --text-primary: #e8e8f0;
+      --text-muted: rgba(232, 232, 240, 0.5);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--bg-void);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    body::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      background-position: -1px -1px;
+      transform: perspective(500px) rotateX(60deg) scale(2);
+      transform-origin: center 100%;
+      pointer-events: none;
+      animation: gridFlow 20s linear infinite;
+    }
+
+    @keyframes gridFlow {
+      0% { background-position: -1px -1px; }
+      100% { background-position: -1px 59px; }
+    }
+
+    body::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.15) 2px,
+        rgba(0, 0, 0, 0.15) 4px
+      );
+      pointer-events: none;
+      z-index: 1000;
+    }
+
+    .container {
+      text-align: center;
+      z-index: 1;
+      animation: fadeInUp 1s cubic-bezier(0.19, 1, 0.22, 1);
+      max-width: 520px;
+      width: 90%;
+      padding: 20px;
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(40px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    h1 {
+      font-family: 'Orbitron', sans-serif;
+      font-size: clamp(3rem, 10vw, 5.5rem);
+      font-weight: 900;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      margin-bottom: 0;
+      color: var(--neon-cyan);
+      text-shadow: 
+        0 0 10px var(--neon-cyan),
+        0 0 20px var(--neon-cyan),
+        0 0 40px var(--neon-cyan),
+        0 0 80px rgba(0, 240, 255, 0.5);
+      animation: neonPulse 3s ease-in-out infinite alternate;
+      position: relative;
+    }
+
+    @keyframes neonPulse {
+      from {
+        text-shadow: 
+          0 0 10px var(--neon-cyan),
+          0 0 20px var(--neon-cyan),
+          0 0 40px var(--neon-cyan),
+          0 0 80px rgba(0, 240, 255, 0.5);
+      }
+      to {
+        text-shadow: 
+          0 0 15px var(--neon-pink),
+          0 0 30px var(--neon-pink),
+          0 0 60px var(--neon-pink),
+          0 0 100px rgba(255, 45, 149, 0.5);
+      }
+    }
+
+    .subtitle {
+      font-family: 'Orbitron', sans-serif;
+      font-size: clamp(0.75rem, 2vw, 1rem);
+      letter-spacing: 0.5em;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      font-weight: 400;
+    }
+
+    .tagline {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: clamp(0.65rem, 1.5vw, 0.85rem);
+      letter-spacing: 0.15em;
+      color: var(--neon-green);
+      margin-bottom: 3rem;
+      text-transform: uppercase;
+      font-weight: 600;
+      text-shadow: 0 0 10px var(--neon-green);
+    }
+
+    .lobby-card {
+      background: var(--panel-bg);
+      border-radius: 12px;
+      padding: clamp(2rem, 5vw, 3rem);
+      border: 1px solid var(--panel-border);
+      box-shadow: 
+        0 0 40px rgba(0, 240, 255, 0.1),
+        inset 0 0 60px rgba(0, 240, 255, 0.03);
+      position: relative;
+    }
+
+    .input-group {
+      margin-bottom: 1.5rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    label {
+      display: block;
+      font-family: 'Orbitron', sans-serif;
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+      text-align: left;
+      font-weight: 700;
+    }
+
+    input {
+      width: 100%;
+      padding: 1rem 1.25rem;
+      font-size: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(0, 0, 0, 0.5);
+      border: 2px solid rgba(0, 240, 255, 0.2);
+      border-radius: 4px;
+      color: var(--text-primary);
+      outline: none;
+      transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+      letter-spacing: 0.05em;
+    }
+
+    input:focus {
+      border-color: var(--neon-cyan);
+      background: rgba(0, 0, 0, 0.7);
+      box-shadow: 
+        0 0 20px rgba(0, 240, 255, 0.3),
+        inset 0 0 20px rgba(0, 240, 255, 0.1);
+      transform: translateY(-2px);
+    }
+
+    input::placeholder {
+      color: rgba(232, 232, 240, 0.3);
+    }
+
+    button {
+      width: 100%;
+      padding: 1.25rem 2rem;
+      font-size: 1.2rem;
+      font-weight: 900;
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      background: var(--neon-cyan);
+      color: var(--bg-void);
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+      box-shadow: 
+        0 0 30px rgba(0, 240, 255, 0.6),
+        0 10px 30px rgba(0, 0, 0, 0.5);
+      z-index: 1;
+    }
+
+    button:hover {
+      transform: translateY(-4px);
+      box-shadow: 
+        0 0 50px rgba(0, 240, 255, 0.8),
+        0 15px 40px rgba(0, 0, 0, 0.7);
+    }
+
+    button:active {
+      transform: translateY(-2px) scale(0.98);
+      box-shadow: 
+        0 0 80px rgba(0, 240, 255, 1),
+        0 5px 20px rgba(0, 0, 0, 0.5);
+      animation: flashClick 0.3s ease-out;
+    }
+
+    @keyframes flashClick {
+      0%, 100% { background: var(--neon-cyan); }
+      50% { background: #ffffff; }
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+    }
+
+    .loading {
+      display: none;
+      margin-top: 1.5rem;
+      font-size: 0.9rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--neon-cyan);
+      letter-spacing: 0.1em;
+      animation: fadeIn 0.3s;
+      text-shadow: 0 0 10px var(--neon-cyan);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .loading.active {
+      display: block;
+    }
+
+    .loading::after {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--neon-cyan);
+      box-shadow: 
+        0 0 10px var(--neon-cyan),
+        15px 0 0 var(--neon-cyan),
+        15px 0 10px var(--neon-cyan),
+        30px 0 0 var(--neon-cyan),
+        30px 0 10px var(--neon-cyan);
+      margin-left: 10px;
+      animation: loadingDots 1.5s infinite;
+    }
+
+    @keyframes loadingDots {
+      0%, 20% { 
+        box-shadow: 
+          0 0 10px var(--neon-cyan),
+          15px 0 0 rgba(0, 240, 255, 0.2),
+          30px 0 0 rgba(0, 240, 255, 0.2);
+      }
+      40% { 
+        box-shadow: 
+          0 0 10px var(--neon-cyan),
+          15px 0 0 var(--neon-cyan),
+          15px 0 10px var(--neon-cyan),
+          30px 0 0 rgba(0, 240, 255, 0.2);
+      }
+      60%, 100% { 
+        box-shadow: 
+          0 0 10px var(--neon-cyan),
+          15px 0 0 var(--neon-cyan),
+          15px 0 10px var(--neon-cyan),
+          30px 0 0 var(--neon-cyan),
+          30px 0 10px var(--neon-cyan);
+      }
+    }
+
+    @media (max-width: 600px) {
+      .tagline {
+        margin-bottom: 2rem;
+      }
+      
+      .lobby-card {
+        padding: 2rem 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>XONIX</h1>
+    <div class="subtitle">MULTIPLAYER</div>
+    <div class="tagline">8 PLAYERS • REAL-TIME</div>
+    
+    <div class="lobby-card">
+      <div class="input-group">
+        <label for="playerName">Player Name</label>
+        <input 
+          type="text" 
+          id="playerName" 
+          maxlength="20" 
+          placeholder="Enter your name"
+          autocomplete="off"
+        >
+      </div>
+      
+      <button id="playButton">Play</button>
+      
+      <div class="loading" id="loading">Finding game</div>
+    </div>
+  </div>
+
+  <script>
+    const nameInput = document.getElementById('playerName');
+    const playButton = document.getElementById('playButton');
+    const loading = document.getElementById('loading');
+
+    nameInput.value = `Player${Math.floor(Math.random() * 10000)}`;
+    nameInput.focus();
+    nameInput.select();
+
+    const particlesContainer = document.querySelector('.particles');
+    if (particlesContainer) {
+      for (let i = 0; i < 30; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'particle';
+        particle.style.left = `${Math.random() * 100}%`;
+        particle.style.animationDuration = `${15 + Math.random() * 15}s`;
+        particle.style.animationDelay = `${Math.random() * 5}s`;
+        particle.style.opacity = Math.random() * 0.5 + 0.2;
+        particlesContainer.appendChild(particle);
+      }
+    }
+
+    async function findRoom() {
+      const name = nameInput.value.trim() || `Player${Math.floor(Math.random() * 10000)}`;
+      
+      playButton.disabled = true;
+      loading.classList.add('active');
+
+      try {
+        const response = await fetch('/api/find-room');
+        if (!response.ok) throw new Error('Failed to find room');
+        
+        const data = await response.json();
+        const roomId = data.roomId;
+        
+        window.location.href = `/game.html?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(name)}`;
+      } catch (error) {
+        console.error('Error finding room:', error);
+        alert('Failed to find a game. Please try again.');
+        playButton.disabled = false;
+        loading.classList.remove('active');
+      }
+    }
+
+    playButton.addEventListener('click', findRoom);
+    
+    nameInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') findRoom();
+    });
+  </script>
+</body>
+</html>

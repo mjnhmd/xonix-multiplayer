@@ -1,0 +1,16 @@
+name = "xonix-multiplayer"
+main = "src/worker.ts"
+compatibility_date = "2025-03-12"
+assets = { directory = "./public" }
+
+[[durable_objects.bindings]]
+name = "GAME_ROOMS"
+class_name = "GameRoom"
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "Lobby"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom", "Lobby"]

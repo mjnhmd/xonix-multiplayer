@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>XONIX Game</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-void: #08080f;
+      --bg-grid: #0d0d1a;
+      --border-zone: #1a1a2a;
+      --neon-cyan: #00f0ff;
+      --neon-pink: #ff2d95;
+      --neon-green: #39ff14;
+      --neon-amber: #ffab00;
+      --panel-bg: rgba(8, 8, 15, 0.92);
+      --panel-border: rgba(0, 240, 255, 0.15);
+      --text-primary: #e8e8f0;
+      --text-muted: rgba(232, 232, 240, 0.5);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--bg-void);
+      color: var(--text-primary);
+      overflow: hidden;
+      position: relative;
+      touch-action: none;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.2) 2px,
+        rgba(0, 0, 0, 0.2) 4px
+      );
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    #gameCanvas {
+      display: block;
+      margin: 0 auto;
+      background: #1a1a2e;
+      border: 1px solid rgba(0, 240, 255, 0.3);
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    .hud {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: var(--panel-bg);
+      padding: 10px 16px;
+      border-radius: 4px;
+      border: 1px solid var(--panel-border);
+      box-shadow: 
+        0 0 20px rgba(0, 240, 255, 0.15),
+        0 4px 20px rgba(0, 0, 0, 0.5);
+      font-size: 13px;
+      font-family: 'JetBrains Mono', monospace;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .player-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      box-shadow: 0 0 12px currentColor;
+      animation: dotPulse 2s ease-in-out infinite;
+    }
+
+    @keyframes dotPulse {
+      0%, 100% { 
+        transform: scale(1);
+        box-shadow: 0 0 12px currentColor;
+      }
+      50% { 
+        transform: scale(1.1);
+        box-shadow: 0 0 18px currentColor;
+      }
+    }
+
+    .hud-value {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .hud-ping {
+      color: var(--text-muted);
+      margin-left: 4px;
+    }
+
+    .leaderboard {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      background: var(--panel-bg);
+      padding: 10px 12px;
+      border-radius: 4px;
+      border: 1px solid var(--panel-border);
+      box-shadow: 
+        0 0 20px rgba(0, 240, 255, 0.15),
+        0 4px 16px rgba(0, 0, 0, 0.5);
+      min-width: 180px;
+      max-width: 220px;
+      z-index: 100;
+      transition: all 0.2s ease;
+    }
+
+    .leaderboard.collapsed .leaderboard-entries {
+      display: none;
+    }
+
+    .leaderboard-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .leaderboard-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--neon-cyan);
+      text-shadow: 0 0 10px var(--neon-cyan);
+    }
+
+    .leaderboard-toggle {
+      font-size: 10px;
+      color: var(--text-muted);
+      transition: transform 0.3s;
+    }
+
+    .leaderboard.collapsed .leaderboard-toggle {
+      transform: rotate(180deg);
+    }
+
+    .leaderboard-entries {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      margin-top: 8px;
+    }
+
+    .leaderboard-entry {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-left: 2px solid transparent;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      transition: all 0.2s;
+    }
+
+    .leaderboard-entry:last-child {
+      border-bottom: none;
+    }
+
+    .leaderboard-entry.you {
+      border-left-color: var(--neon-cyan);
+      background: rgba(0, 240, 255, 0.05);
+    }
+
+    .leaderboard-rank {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-muted);
+      min-width: 16px;
+    }
+
+    .leaderboard-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      box-shadow: 0 0 8px currentColor;
+      flex-shrink: 0;
+    }
+
+    .leaderboard-name {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: rgba(232, 232, 240, 0.8);
+    }
+
+    .leaderboard-entry.you .leaderboard-name {
+      color: var(--text-primary);
+      font-weight: 700;
+    }
+
+    .leaderboard-area {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      min-width: 42px;
+      text-align: right;
+    }
+
+    .notification {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--panel-bg);
+      padding: 20px 35px;
+      border-radius: 6px;
+      font-family: 'Orbitron', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      box-shadow: 
+        0 0 40px rgba(255, 45, 149, 0.6),
+        0 10px 40px rgba(0, 0, 0, 0.7);
+      z-index: 200;
+      animation: notificationSlide 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+      display: none;
+      border: 2px solid var(--neon-pink);
+      color: var(--neon-pink);
+      text-shadow: 0 0 15px var(--neon-pink);
+    }
+
+    @keyframes notificationSlide {
+      0% {
+        transform: translate(-50%, -200%);
+        opacity: 0;
+      }
+      60% {
+        transform: translate(-50%, -45%);
+      }
+      100% {
+        transform: translate(-50%, -50%);
+        opacity: 1;
+      }
+    }
+
+    .game-over {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.95);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 300;
+      animation: fadeIn 0.5s;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .game-over-content {
+      text-align: center;
+      animation: slideUp 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+    }
+
+    @keyframes slideUp {
+      from {
+        transform: translateY(40px);
+        opacity: 0;
+      }
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+
+    .game-over-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: clamp(48px, 10vw, 80px);
+      font-weight: 900;
+      letter-spacing: 0.25em;
+      color: var(--neon-pink);
+      text-shadow: 
+        0 0 20px var(--neon-pink),
+        0 0 40px var(--neon-pink),
+        0 0 80px rgba(255, 45, 149, 0.5);
+      margin-bottom: 25px;
+      text-transform: uppercase;
+    }
+
+    .game-over-winner {
+      font-family: 'Orbitron', sans-serif;
+      font-size: clamp(20px, 4vw, 28px);
+      font-weight: 700;
+      margin-bottom: 35px;
+      color: var(--neon-cyan);
+      text-shadow: 0 0 20px var(--neon-cyan);
+    }
+
+    .game-over-rankings {
+      background: var(--panel-bg);
+      padding: 25px 35px;
+      border-radius: 6px;
+      border: 1px solid var(--panel-border);
+      box-shadow: 
+        0 0 40px rgba(0, 240, 255, 0.2),
+        inset 0 0 60px rgba(0, 240, 255, 0.05);
+      display: inline-block;
+      min-width: 420px;
+      max-width: 90vw;
+    }
+
+    .game-over-rankings-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      margin-bottom: 18px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .play-again-btn {
+      margin-top: 25px;
+      padding: 12px 30px;
+      font-family: 'Orbitron', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      background: var(--neon-cyan);
+      color: var(--bg-void);
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.3s;
+      box-shadow: 0 0 30px rgba(0, 240, 255, 0.5);
+    }
+
+    .play-again-btn:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 0 50px rgba(0, 240, 255, 0.8);
+    }
+
+    .mobile-controls {
+      display: none;
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
+    }
+
+    @media (max-width: 768px), (pointer: coarse) {
+      .mobile-controls {
+        display: grid;
+        grid-template-areas:
+          ". up ."
+          "left . right"
+          ". down .";
+        gap: 12px;
+        grid-template-columns: 65px 65px 65px;
+        grid-template-rows: 65px 65px 65px;
+      }
+    }
+
+    .control-btn {
+      width: 65px;
+      height: 65px;
+      background: rgba(8, 8, 15, 0.8);
+      border: 2px solid rgba(0, 240, 255, 0.3);
+      border-radius: 50%;
+      color: var(--neon-cyan);
+      font-size: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      touch-action: manipulation;
+      box-shadow: 
+        0 0 20px rgba(0, 240, 255, 0.2),
+        inset 0 0 20px rgba(0, 240, 255, 0.05);
+    }
+
+    #btnUp { grid-area: up; }
+    #btnDown { grid-area: down; }
+    #btnLeft { grid-area: left; }
+    #btnRight { grid-area: right; }
+
+    .control-btn:active {
+      background: rgba(0, 240, 255, 0.2);
+      border-color: var(--neon-cyan);
+      transform: scale(0.92);
+      box-shadow: 
+        0 0 40px rgba(0, 240, 255, 0.6),
+        inset 0 0 30px rgba(0, 240, 255, 0.15);
+    }
+
+    @media (max-width: 900px) {
+      .hud {
+        top: 12px;
+        left: 12px;
+        padding: 8px 12px;
+        font-size: 11px;
+      }
+
+      .player-dot {
+        width: 8px;
+        height: 8px;
+      }
+
+      .leaderboard {
+        top: 10px;
+        right: 10px;
+        padding: 8px 10px;
+        min-width: 160px;
+      }
+
+      .leaderboard-entry {
+        padding: 5px 6px;
+      }
+
+      .game-over-rankings {
+        min-width: 320px;
+        padding: 20px 25px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <div class="hud">
+    <div class="player-dot" id="hudPlayerDot"></div>
+    <span class="hud-value" id="hudPlayerName">●</span>
+    <span class="hud-ping">·</span>
+    <span class="hud-value" id="hudPing">--</span>
+  </div>
+
+  <div class="leaderboard" id="leaderboard">
+    <div class="leaderboard-header" onclick="document.getElementById('leaderboard').classList.toggle('collapsed')">
+      <div class="leaderboard-title">RANKINGS</div>
+      <div class="leaderboard-toggle">▲</div>
+    </div>
+    <div class="leaderboard-entries" id="leaderboardEntries"></div>
+  </div>
+
+  <div class="notification" id="notification"></div>
+
+  <div class="game-over" id="gameOver">
+    <div class="game-over-content">
+      <div class="game-over-title">GAME OVER</div>
+      <div class="game-over-winner" id="gameOverWinner"></div>
+      <div class="game-over-rankings">
+        <div class="game-over-rankings-title">FINAL RANKINGS</div>
+        <div class="leaderboard-entries" id="gameOverRankings"></div>
+        <button class="play-again-btn" onclick="window.location.href='/'">PLAY AGAIN</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-controls">
+    <button class="control-btn" id="btnUp">↑</button>
+    <button class="control-btn" id="btnDown">↓</button>
+    <button class="control-btn" id="btnLeft">←</button>
+    <button class="control-btn" id="btnRight">→</button>
+  </div>
+
+  <script>
+    const PLAYER_COLORS = [
+      '#e74c3c',
+      '#3498db',
+      '#2ecc71',
+      '#f39c12',
+      '#9b59b6',
+      '#1abc9c',
+      '#e91e63',
+      '#00bcd4',
+    ];
+    const NEUTRAL_SAFE_COLOR = '#444444';
+    const UNCLAIMED_COLOR = '#1a1a2e';
+    const ENEMY_COLOR = '#9b59b6';
+
+    const GRID_WIDTH = 800;
+    const GRID_HEIGHT = 600;
+
+    const DIR = { NONE: 0, UP: 1, DOWN: 2, LEFT: 3, RIGHT: 4 };
+
+    const params = new URLSearchParams(window.location.search);
+    const roomId = params.get('room');
+    const playerName = params.get('name') || `Player${Math.floor(Math.random() * 10000)}`;
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let ws = null;
+    let myPlayerId = null;
+    let grid = new Uint8Array(GRID_WIDTH * GRID_HEIGHT);
+    let players = new Map();
+    let enemies = [];
+    let rankings = [];
+    let currentDir = DIR.NONE;
+    let inputSeq = 0;
+    let lastPingTime = 0;
+    let latency = 0;
+
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    const prevPlayerPositions = new Map();
+
+    function resizeCanvas() {
+      const scale = Math.min(
+        window.innerWidth / GRID_WIDTH,
+        window.innerHeight / GRID_HEIGHT
+      );
+      canvas.width = GRID_WIDTH;
+      canvas.height = GRID_HEIGHT;
+      canvas.style.width = `${GRID_WIDTH * scale}px`;
+      canvas.style.height = `${GRID_HEIGHT * scale}px`;
+    }
+
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host;
+      const wsUrl = `${protocol}//${host}/api/room/${roomId}/ws?name=${encodeURIComponent(playerName)}`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            lastPingTime = Date.now();
+            ws.send(JSON.stringify({ type: 4, t: lastPingTime }));
+          }
+        }, 3000);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          handleServerMessage(msg);
+        } catch (err) {
+          console.error('Failed to parse message:', err);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket closed, reconnecting...');
+        setTimeout(connectWebSocket, 2000);
+      };
+    }
+
+    function handleServerMessage(msg) {
+      switch (msg.type) {
+        case 10:
+          myPlayerId = msg.playerId;
+          document.getElementById('hudPlayerName').textContent = `You: ${playerName}`;
+          break;
+
+        case 11:
+          if (msg.grid) {
+            const decoded = atob(msg.grid);
+            for (let i = 0; i < decoded.length; i++) {
+              grid[i] = decoded.charCodeAt(i);
+            }
+          }
+          if (msg.players) {
+            players.clear();
+            msg.players.forEach(p => {
+              players.set(p.id, p);
+              if (!prevPlayerPositions.has(p.id)) {
+                prevPlayerPositions.set(p.id, { x: p.x, y: p.y });
+              }
+            });
+          }
+          if (msg.enemies) {
+            enemies = msg.enemies;
+          }
+          if (msg.rankings) {
+            rankings = msg.rankings;
+            updateLeaderboard();
+          }
+          break;
+
+        case 12:
+          if (msg.changes) {
+            for (let i = 0; i < msg.changes.length; i += 3) {
+              const x = msg.changes[i];
+              const y = msg.changes[i + 1];
+              const ownerId = msg.changes[i + 2];
+              grid[y * GRID_WIDTH + x] = ownerId;
+            }
+          }
+          if (msg.players) {
+            msg.players.forEach(p => {
+              const existing = players.get(p.id);
+              if (existing) {
+                prevPlayerPositions.set(p.id, { x: existing.x, y: existing.y });
+              }
+              players.set(p.id, p);
+            });
+          }
+          if (msg.enemies) {
+            enemies = msg.enemies;
+          }
+          if (msg.rankings) {
+            rankings = msg.rankings;
+            updateLeaderboard();
+          }
+          break;
+
+        case 13:
+          if (msg.player) {
+            players.set(msg.player.id, msg.player);
+            prevPlayerPositions.set(msg.player.id, { x: msg.player.x, y: msg.player.y });
+          }
+          break;
+
+        case 14:
+          if (msg.playerId) {
+            players.delete(msg.playerId);
+            prevPlayerPositions.delete(msg.playerId);
+          }
+          break;
+
+        case 15:
+          if (msg.playerId === myPlayerId) {
+            showNotification('You died! Respawning...');
+          }
+          break;
+
+        case 17:
+          showGameOver(msg.winnerId, msg.rankings);
+          break;
+
+        case 18:
+          latency = Date.now() - msg.t;
+          document.getElementById('hudPing').textContent = `${latency}ms`;
+          break;
+
+        case 19:
+          rankings = msg.rankings;
+          updateLeaderboard();
+          break;
+      }
+    }
+
+    function sendInput(dir) {
+      if (currentDir === dir) return;
+      currentDir = dir;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 2, dir, seq: inputSeq++ }));
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      switch (e.key.toLowerCase()) {
+        case 'w':
+        case 'arrowup':
+          sendInput(DIR.UP);
+          e.preventDefault();
+          break;
+        case 's':
+        case 'arrowdown':
+          sendInput(DIR.DOWN);
+          e.preventDefault();
+          break;
+        case 'a':
+        case 'arrowleft':
+          sendInput(DIR.LEFT);
+          e.preventDefault();
+          break;
+        case 'd':
+        case 'arrowright':
+          sendInput(DIR.RIGHT);
+          e.preventDefault();
+          break;
+        case ' ':
+          sendInput(DIR.NONE);
+          e.preventDefault();
+          break;
+      }
+    });
+
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      const touchEndX = e.changedTouches[0].clientX;
+      const touchEndY = e.changedTouches[0].clientY;
+      const dx = touchEndX - touchStartX;
+      const dy = touchEndY - touchStartY;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+
+      if (Math.max(absDx, absDy) > 15) {
+        if (absDx > absDy) {
+          sendInput(dx > 0 ? DIR.RIGHT : DIR.LEFT);
+        } else {
+          sendInput(dy > 0 ? DIR.DOWN : DIR.UP);
+        }
+      }
+    }, { passive: false });
+
+    document.getElementById('btnUp').addEventListener('click', () => sendInput(DIR.UP));
+    document.getElementById('btnDown').addEventListener('click', () => sendInput(DIR.DOWN));
+    document.getElementById('btnLeft').addEventListener('click', () => sendInput(DIR.LEFT));
+    document.getElementById('btnRight').addEventListener('click', () => sendInput(DIR.RIGHT));
+
+    function updateLeaderboard() {
+      const container = document.getElementById('leaderboardEntries');
+      container.innerHTML = '';
+
+      rankings.forEach((entry, index) => {
+        const div = document.createElement('div');
+        div.className = 'leaderboard-entry';
+        if (entry.id === myPlayerId) {
+          div.classList.add('you');
+        }
+
+        const rank = document.createElement('div');
+        rank.className = 'leaderboard-rank';
+        rank.textContent = `${index + 1}.`;
+
+        const dot = document.createElement('div');
+        dot.className = 'leaderboard-dot';
+        dot.style.backgroundColor = entry.color || PLAYER_COLORS[entry.id % PLAYER_COLORS.length];
+
+        const name = document.createElement('div');
+        name.className = 'leaderboard-name';
+        name.textContent = entry.name;
+
+        const area = document.createElement('div');
+        area.className = 'leaderboard-area';
+        area.textContent = `${(entry.percent || 0).toFixed(1)}%`;
+
+        div.appendChild(rank);
+        div.appendChild(dot);
+        div.appendChild(name);
+        div.appendChild(area);
+        container.appendChild(div);
+      });
+    }
+
+    function showNotification(text) {
+      const notif = document.getElementById('notification');
+      notif.textContent = text;
+      notif.style.display = 'block';
+      setTimeout(() => {
+        notif.style.display = 'none';
+      }, 2000);
+    }
+
+    function showGameOver(winnerId, finalRankings) {
+      const overlay = document.getElementById('gameOver');
+      const winnerEl = document.getElementById('gameOverWinner');
+      const rankingsEl = document.getElementById('gameOverRankings');
+
+      const winner = finalRankings.find(e => e.id === winnerId);
+      winnerEl.textContent = winner ? `Winner: ${winner.name}` : 'Game Over!';
+
+      rankingsEl.innerHTML = '';
+      finalRankings.forEach((entry, index) => {
+        const div = document.createElement('div');
+        div.className = 'leaderboard-entry';
+        if (entry.id === myPlayerId) {
+          div.classList.add('you');
+        }
+
+        const rank = document.createElement('div');
+        rank.className = 'leaderboard-rank';
+        rank.textContent = `${index + 1}.`;
+
+        const dot = document.createElement('div');
+        dot.className = 'leaderboard-dot';
+        dot.style.backgroundColor = entry.color || PLAYER_COLORS[entry.id % PLAYER_COLORS.length];
+
+        const name = document.createElement('div');
+        name.className = 'leaderboard-name';
+        name.textContent = entry.name;
+
+        const area = document.createElement('div');
+        area.className = 'leaderboard-area';
+        area.textContent = `${(entry.percent || 0).toFixed(1)}%`;
+
+        div.appendChild(rank);
+        div.appendChild(dot);
+        div.appendChild(name);
+        div.appendChild(area);
+        rankingsEl.appendChild(div);
+      });
+
+      overlay.style.display = 'flex';
+    }
+
+    function render() {
+      ctx.fillStyle = UNCLAIMED_COLOR;
+      ctx.fillRect(0, 0, GRID_WIDTH, GRID_HEIGHT);
+
+      const imageData = ctx.createImageData(GRID_WIDTH, GRID_HEIGHT);
+      const data = imageData.data;
+
+      for (let i = 0; i < grid.length; i++) {
+        const ownerId = grid[i];
+        const idx = i * 4;
+
+        if (ownerId === 0) {
+          data[idx] = 26; data[idx + 1] = 26; data[idx + 2] = 46; data[idx + 3] = 255;
+        } else if (ownerId === 255) {
+          data[idx] = 55; data[idx + 1] = 55; data[idx + 2] = 65; data[idx + 3] = 255;
+        } else {
+          const rgb = hexToRgb(PLAYER_COLORS[(ownerId - 1) % PLAYER_COLORS.length]);
+          data[idx] = Math.floor(rgb.r * 0.55 + 20);
+          data[idx + 1] = Math.floor(rgb.g * 0.55 + 20);
+          data[idx + 2] = Math.floor(rgb.b * 0.55 + 20);
+          data[idx + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+
+      players.forEach((player, id) => {
+        const color = PLAYER_COLORS[player.id % PLAYER_COLORS.length];
+        
+        if (player.trail && player.trail.length > 0) {
+          ctx.save();
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 6;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.beginPath();
+          ctx.moveTo(player.trail[0].x, player.trail[0].y);
+          for (let i = 1; i < player.trail.length; i++) {
+            ctx.lineTo(player.trail[i].x, player.trail[i].y);
+          }
+          ctx.lineTo(player.x, player.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        const prev = prevPlayerPositions.get(id) || { x: player.x, y: player.y };
+        const alpha = 0.3;
+        const interpX = prev.x + (player.x - prev.x) * alpha;
+        const interpY = prev.y + (player.y - prev.y) * alpha;
+
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = id === myPlayerId ? 16 : 8;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(interpX, interpY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(interpX, interpY, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (id === myPlayerId) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+          ctx.lineWidth = 1;
+          ctx.shadowColor = '#ffffff';
+          ctx.shadowBlur = 6;
+          ctx.beginPath();
+          ctx.arc(interpX, interpY, 7, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        prevPlayerPositions.set(id, { x: interpX, y: interpY });
+      });
+
+      enemies.forEach(enemy => {
+        ctx.save();
+        ctx.shadowColor = ENEMY_COLOR;
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = ENEMY_COLOR;
+        ctx.beginPath();
+        ctx.arc(enemy.x, enemy.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.beginPath();
+        ctx.arc(enemy.x - 1.5, enemy.y - 1.5, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+
+      const me = players.get(myPlayerId);
+      if (me) {
+        const myColor = PLAYER_COLORS[me.id % PLAYER_COLORS.length];
+        document.getElementById('hudPlayerDot').style.backgroundColor = myColor;
+      }
+    }
+
+    function hexToRgb(hex) {
+      const bigint = parseInt(hex.slice(1), 16);
+      return {
+        r: (bigint >> 16) & 255,
+        g: (bigint >> 8) & 255,
+        b: bigint & 255
+      };
+    }
+
+    function gameLoop() {
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    connectWebSocket();
+    gameLoop();
+  </script>
+</body>
+</html>

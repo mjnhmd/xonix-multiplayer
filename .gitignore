@@ -1,0 +1,4 @@
+node_modules/
+.wrangler/
+*.png
+.DS_Store
