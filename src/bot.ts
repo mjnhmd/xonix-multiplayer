@@ -28,19 +28,21 @@ interface BotPlan {
 }
 
 const botPlans = new Map<number, BotPlan>();
+const botExitDirs = new Map<number, Direction>();
 
 export function updateBot(bot: ServerPlayer, engine: GameEngine): Direction | null {
   if (bot.state === PlayerState.DEAD) {
     botPlans.delete(bot.id);
+    botExitDirs.delete(bot.id);
     return null;
   }
 
   if (bot.state === PlayerState.IDLE) {
-    return startNewPlan(bot, engine);
+    return pickExitDirection(bot, engine);
   }
 
   if (bot.state === PlayerState.MOVING_SAFE) {
-    return startNewPlan(bot, engine);
+    return handleMovingSafe(bot, engine);
   }
 
   if (bot.state === PlayerState.DRAWING) {
@@ -50,23 +52,68 @@ export function updateBot(bot: ServerPlayer, engine: GameEngine): Direction | nu
   return null;
 }
 
-function startNewPlan(bot: ServerPlayer, engine: GameEngine): Direction {
-  const plan = createRectanglePlan(bot, engine);
-  botPlans.set(bot.id, plan);
-  return plan.steps[0];
+function handleMovingSafe(bot: ServerPlayer, engine: GameEngine): Direction | null {
+  const existingDir = botExitDirs.get(bot.id);
+
+  if (existingDir && (existingDir as number) !== (Direction.NONE as number)) {
+    if (isNearMapEdge(bot)) {
+      return pickExitDirection(bot, engine);
+    }
+    return null;
+  }
+
+  return pickExitDirection(bot, engine);
+}
+
+function pickExitDirection(bot: ServerPlayer, engine: GameEngine): Direction {
+  const dir = findDirectionToTerrritoryEdge(bot, engine);
+  botExitDirs.set(bot.id, dir);
+  botPlans.delete(bot.id);
+  return dir;
+}
+
+function findDirectionToTerrritoryEdge(bot: ServerPlayer, engine: GameEngine): Direction {
+  const ownerId = bot.id + 1;
+  const dirs = [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT] as const;
+
+  let bestDir = dirs[Math.floor(Math.random() * 4)];
+  let bestDist = Infinity;
+
+  for (const dir of dirs) {
+    const dx = dir === Direction.LEFT ? -1 : dir === Direction.RIGHT ? 1 : 0;
+    const dy = dir === Direction.UP ? -1 : dir === Direction.DOWN ? 1 : 0;
+
+    for (let d = 1; d <= 400; d++) {
+      const tx = Math.round(bot.x + dx * d);
+      const ty = Math.round(bot.y + dy * d);
+
+      if (tx <= BORDER || tx >= GAME_W - BORDER || ty <= BORDER || ty >= GAME_H - BORDER) break;
+
+      const owner = engine.grid[ty * GAME_W + tx];
+      if (owner !== ownerId && owner !== 255) {
+        if (d < bestDist) {
+          bestDist = d;
+          bestDir = dir;
+        }
+        break;
+      }
+    }
+  }
+
+  return bestDir;
 }
 
 function createRectanglePlan(bot: ServerPlayer, engine: GameEngine): BotPlan {
-  const safeDir = pickDirectionAwayFromSafety(bot, engine);
+  const currentDir = bot.dir;
   const outDist = 40 + Math.floor(Math.random() * 80);
   const sideDist = 40 + Math.floor(Math.random() * 80);
 
-  const returnDir = oppositeOf(safeDir);
-  const sideDir = pickPerpendicularDir(safeDir);
+  const sideDir = pickPerpendicularDir(currentDir);
+  const returnDir = oppositeOf(currentDir);
 
-  // 矩形路线: 离开安全区 → 横移 → 回到安全区
+  // 矩形路线: 继续当前方向(深入) → 横移 → 返回安全区
   return {
-    steps: [safeDir, sideDir, returnDir],
+    steps: [currentDir, sideDir, returnDir],
     stepDistances: [outDist, sideDist, outDist + 30],
     stepIndex: 0,
     distanceTraveled: 0,
@@ -74,15 +121,17 @@ function createRectanglePlan(bot: ServerPlayer, engine: GameEngine): BotPlan {
 }
 
 function executeDrawingPlan(bot: ServerPlayer, engine: GameEngine): Direction | null {
-  const plan = botPlans.get(bot.id);
+  let plan = botPlans.get(bot.id);
 
   if (!plan) {
-    return headTowardSafety(bot, engine);
+    plan = createRectanglePlan(bot, engine);
+    botPlans.set(bot.id, plan);
+    return plan.steps[0];
   }
 
   plan.distanceTraveled += Math.abs(bot.vx) > 0 ? Math.abs(bot.vx) / 20 : Math.abs(bot.vy) / 20;
 
-  if (isAboutToHitOwnTrail(bot, engine)) {
+  if (isAboutToHitOwnTrail(bot)) {
     botPlans.delete(bot.id);
     return headTowardSafety(bot, engine);
   }
@@ -120,7 +169,7 @@ function headTowardSafety(bot: ServerPlayer, engine: GameEngine): Direction {
     const dx = dir === Direction.LEFT ? -1 : dir === Direction.RIGHT ? 1 : 0;
     const dy = dir === Direction.UP ? -1 : dir === Direction.DOWN ? 1 : 0;
 
-    for (let d = 1; d <= 300; d++) {
+    for (let d = 1; d <= 400; d++) {
       const tx = Math.round(bot.x + dx * d);
       const ty = Math.round(bot.y + dy * d);
       if (tx < 0 || tx >= GAME_W || ty < 0 || ty >= GAME_H) break;
@@ -157,7 +206,7 @@ function wouldHitOwnTrail(bot: ServerPlayer, dir: Direction, maxDist: number): b
   return false;
 }
 
-function isAboutToHitOwnTrail(bot: ServerPlayer, engine: GameEngine): boolean {
+function isAboutToHitOwnTrail(bot: ServerPlayer): boolean {
   if (bot.trail.length < 3) return false;
 
   const dx = bot.vx > 0 ? 1 : bot.vx < 0 ? -1 : 0;
@@ -188,29 +237,6 @@ function pointNearSegment(px: number, py: number, ax: number, ay: number, bx: nu
   const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / len2));
   const cx = ax + t * abx, cy = ay + t * aby;
   return Math.hypot(px - cx, py - cy) < threshold;
-}
-
-function pickDirectionAwayFromSafety(bot: ServerPlayer, engine: GameEngine): Direction {
-  const ownerId = bot.id + 1;
-  const dirs = [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT] as const;
-  const unsafeDirs: Direction[] = [];
-
-  for (const dir of dirs) {
-    const dx = dir === Direction.LEFT ? -1 : dir === Direction.RIGHT ? 1 : 0;
-    const dy = dir === Direction.UP ? -1 : dir === Direction.DOWN ? 1 : 0;
-    const tx = Math.round(bot.x + dx * 20);
-    const ty = Math.round(bot.y + dy * 20);
-    if (tx < BORDER || tx >= GAME_W - BORDER || ty < BORDER || ty >= GAME_H - BORDER) continue;
-    const owner = engine.grid[ty * GAME_W + tx];
-    if (owner !== ownerId && owner !== 255) {
-      unsafeDirs.push(dir);
-    }
-  }
-
-  if (unsafeDirs.length > 0) {
-    return unsafeDirs[Math.floor(Math.random() * unsafeDirs.length)];
-  }
-  return dirs[Math.floor(Math.random() * 4)];
 }
 
 function pickPerpendicularDir(dir: Direction): Direction {
