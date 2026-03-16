@@ -2,6 +2,11 @@ name = "xonix-multiplayer"
 main = "src/worker.ts"
 compatibility_date = "2025-03-12"
 assets = { directory = "./public" }
+workers_dev = true
+
+routes = [
+  { pattern = "kuangkuang.top", custom_domain = true },
+]
 
 [[durable_objects.bindings]]
 name = "GAME_ROOMS"
