@@ -627,20 +627,23 @@ export class GameEngine {
 
   private updateAreaPercents(events: GameEvent[]): void {
     const totalPlayableArea = (GAME_W - 2 * BORDER) * (GAME_H - 2 * BORDER);
-    const counts = new Map<number, number>();
 
+    if (this.changedPixels.length === 0 && this.tick > 1) return;
+
+    const counts = new Int32Array(MAX_PLAYERS + 1);
     for (let y = BORDER; y < GAME_H - BORDER; y++) {
+      const rowStart = y * GAME_W;
       for (let x = BORDER; x < GAME_W - BORDER; x++) {
-        const owner = this.grid[y * GAME_W + x];
+        const owner = this.grid[rowStart + x];
         if (owner > 0 && owner < 255) {
-          counts.set(owner, (counts.get(owner) || 0) + 1);
+          counts[owner]++;
         }
       }
     }
 
     for (const p of this.players.values()) {
       const ownerId = p.id + 1;
-      const cnt = counts.get(ownerId) || 0;
+      const cnt = ownerId <= MAX_PLAYERS ? counts[ownerId] : 0;
       const prevPercent = p.areaPercent;
       p.areaPercent = Math.round((cnt / totalPlayableArea) * 100 * 10) / 10;
 
@@ -718,17 +721,16 @@ export class GameEngine {
   }
 
   encodeGrid(): string {
-    const bytes: number[] = [];
-    for (let i = 0; i < this.grid.length; i += 3) {
-      const b1 = this.grid[i] || 0;
-      const b2 = this.grid[i + 1] || 0;
-      const b3 = this.grid[i + 2] || 0;
-      bytes.push(b1, b2, b3);
+    const chunks: string[] = [];
+    const chunkSize = 4096;
+    for (let i = 0; i < this.grid.length; i += chunkSize) {
+      const end = Math.min(i + chunkSize, this.grid.length);
+      let s = '';
+      for (let j = i; j < end; j++) {
+        s += String.fromCharCode(this.grid[j]);
+      }
+      chunks.push(s);
     }
-    let binary = '';
-    for (let i = 0; i < this.grid.length; i++) {
-      binary += String.fromCharCode(this.grid[i]);
-    }
-    return btoa(binary);
+    return btoa(chunks.join(''));
   }
 }

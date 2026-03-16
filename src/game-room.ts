@@ -22,9 +22,10 @@ export class GameRoom extends DurableObject<Env> {
   private engine: GameEngine;
   private playerSlots: (ConnectionMeta | null)[] = new Array(MAX_PLAYERS).fill(null);
   private botSlots: Set<number> = new Set();
-  private tickInterval: ReturnType<typeof setInterval> | null = null;
   private lastTickTime = 0;
+  private running = false;
   private fullStateSentAt: Map<WebSocket, number> = new Map();
+  private broadcastCounter = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -66,7 +67,7 @@ export class GameRoom extends DurableObject<Env> {
       }
 
       this.engine.addPlayer(slotId, name, false);
-      this.ensureTickRunning();
+      this.ensureRunning();
       this.fillWithBots();
 
       const welcome: ServerMsg = {
@@ -133,12 +134,22 @@ export class GameRoom extends DurableObject<Env> {
     if (meta) {
       this.handlePlayerLeave(meta.playerId);
     }
+    this.fullStateSentAt.delete(ws);
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     const meta = ws.deserializeAttachment() as ConnectionMeta | null;
     if (meta) {
       this.handlePlayerLeave(meta.playerId);
+    }
+    this.fullStateSentAt.delete(ws);
+  }
+
+  async alarm(): Promise<void> {
+    if (!this.running) return;
+    this.gameTick();
+    if (this.running) {
+      this.ctx.storage.setAlarm(Date.now() + TICK_MS);
     }
   }
 
@@ -179,7 +190,7 @@ export class GameRoom extends DurableObject<Env> {
 
     const humanCount = this.getHumanCount();
     if (humanCount === 0) {
-      this.stopTick();
+      this.running = false;
       this.cleanupBots();
     } else {
       this.fillWithBots();
@@ -224,17 +235,11 @@ export class GameRoom extends DurableObject<Env> {
     this.botSlots.clear();
   }
 
-  private ensureTickRunning(): void {
-    if (this.tickInterval) return;
+  private ensureRunning(): void {
+    if (this.running) return;
+    this.running = true;
     this.lastTickTime = Date.now();
-    this.tickInterval = setInterval(() => this.gameTick(), TICK_MS);
-  }
-
-  private stopTick(): void {
-    if (this.tickInterval) {
-      clearInterval(this.tickInterval);
-      this.tickInterval = null;
-    }
+    this.ctx.storage.setAlarm(Date.now() + TICK_MS);
   }
 
   private gameTick(): void {
@@ -245,6 +250,8 @@ export class GameRoom extends DurableObject<Env> {
     this.updateBots();
 
     const events = this.engine.update(dt);
+
+    const eliminateQueue: number[] = [];
 
     for (const evt of events) {
       if (evt.type === 'player_died') {
@@ -271,10 +278,14 @@ export class GameRoom extends DurableObject<Env> {
           rankings: this.engine.getRankings(),
         };
         this.broadcast(JSON.stringify(msg));
-        this.stopTick();
+        this.running = false;
       } else if (evt.type === 'player_eliminated') {
-        this.eliminatePlayer(evt.playerId);
+        eliminateQueue.push(evt.playerId);
       }
+    }
+
+    for (const pid of eliminateQueue) {
+      this.eliminatePlayer(pid);
     }
 
     this.broadcastDelta();
@@ -305,26 +316,29 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   private broadcastDelta(): void {
+    this.broadcastCounter++;
+
+    const includeRankings = this.broadcastCounter % 10 === 0;
+
     const delta: ServerDeltaMsg = {
       type: ServerMsgType.DELTA,
       tick: this.engine.tick,
       players: this.engine.getAllPlayerInfos(),
       enemies: this.engine.getEnemyInfos(),
       changes: this.engine.getChangedPixels(),
-      rankings: this.engine.getRankings(),
+      rankings: includeRankings ? this.engine.getRankings() : [],
     };
     const data = JSON.stringify(delta);
 
     for (const ws of this.ctx.getWebSockets()) {
       try {
         const sentAt = this.fullStateSentAt.get(ws);
-        if (!sentAt || this.engine.tick - sentAt > 200) {
+        if (!sentAt || this.engine.tick - sentAt > 400) {
           this.sendFullState(ws);
         } else {
           ws.send(data);
         }
       } catch {
-        // connection dead
       }
     }
   }
@@ -341,7 +355,7 @@ export class GameRoom extends DurableObject<Env> {
 
   private broadcast(data: string): void {
     for (const ws of this.ctx.getWebSockets()) {
-      try { ws.send(data); } catch { /* dead connection */ }
+      try { ws.send(data); } catch { }
     }
   }
 }
