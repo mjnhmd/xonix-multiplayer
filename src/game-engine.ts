@@ -550,9 +550,13 @@ export class GameEngine {
     // 把被圈住的其他玩家也推出去
     for (const other of this.players.values()) {
       if (other.id === p.id) continue;
+      if (other.state === PlayerState.DEAD) continue;
       const ox = clamp(Math.round(other.x), 0, GAME_W - 1);
       const oy = clamp(Math.round(other.y), 0, GAME_H - 1);
-      if (this.grid[oy * GAME_W + ox] === ownerId && other.state !== PlayerState.DEAD) {
+      // Only players standing inside the area captured *just now* are pushed
+      // out — standing on the capturer's older territory must not matter.
+      const otherRegion = regionMap[oy * GAME_W + ox];
+      if (otherRegion >= 0 && captureSet.has(otherRegion)) {
         this.respawnPlayer(other);
       }
     }
