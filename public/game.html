@@ -448,10 +448,32 @@
         padding: 20px 25px;
       }
     }
+
+    #debugHud {
+      position: fixed;
+      left: 10px;
+      bottom: 10px;
+      z-index: 60;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.62);
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 5px;
+      padding: 5px 9px;
+      white-space: pre;
+      pointer-events: none;
+      display: none;
+    }
+
+    #debugHud.on { display: block; }
   </style>
 </head>
 <body>
   <canvas id="gameCanvas"></canvas>
+
+  <div id="debugHud"></div>
 
   <div class="hud">
     <div class="player-dot" id="hudPlayerDot"></div>
@@ -530,7 +552,94 @@
     let touchStartX = 0;
     let touchStartY = 0;
 
-    const prevPlayerPositions = new Map();
+    // Server snapshots arrive at 20Hz. Render ~2 ticks behind and interpolate
+    // between the last two snapshots, so motion is smooth at any frame rate
+    // instead of "chase and stop" every 50ms.
+    const TICK_MS = 50;
+    const INTERP_TICKS = 2;
+    const EXTRAP_MAX_TICKS = 3;
+    let latestTick = 0;
+    let latestTickAt = performance.now();
+
+    function pushSnapshot(hist, tick, x, y) {
+      const last = hist[hist.length - 1];
+      if (last && last.t === tick) {
+        last.x = x;
+        last.y = y;
+        return;
+      }
+      if (last && (Math.abs(x - last.x) > 120 || Math.abs(y - last.y) > 120)) {
+        hist.length = 0;
+      }
+      hist.push({ t: tick, x, y });
+      if (hist.length > 40) hist.shift();
+    }
+
+    function recordSnapshot(player, tick, x, y) {
+      if (!player.hist) player.hist = [];
+      pushSnapshot(player.hist, tick, x, y);
+      if (tick > latestTick) {
+        latestTick = tick;
+        latestTickAt = performance.now();
+      }
+    }
+
+    function sampleHistory(hist, renderTick, fallbackX, fallbackY) {
+      if (!hist || hist.length === 0) return { x: fallbackX, y: fallbackY };
+      if (hist.length === 1 || renderTick <= hist[0].t) return hist[0];
+
+      const last = hist[hist.length - 1];
+      if (renderTick >= last.t) {
+        const prev = hist[hist.length - 2];
+        const span = last.t - prev.t;
+        if (span <= 0) return last;
+        const f = Math.min((renderTick - last.t) / span, EXTRAP_MAX_TICKS);
+        return { x: last.x + (last.x - prev.x) * f, y: last.y + (last.y - prev.y) * f };
+      }
+
+      for (let i = 1; i < hist.length; i++) {
+        if (renderTick <= hist[i].t) {
+          const a = hist[i - 1];
+          const b = hist[i];
+          const span = b.t - a.t;
+          const f = span > 0 ? (renderTick - a.t) / span : 0;
+          return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+        }
+      }
+      return last;
+    }
+
+    function samplePosition(player, renderTick) {
+      return sampleHistory(player.hist, renderTick, player.x, player.y);
+    }
+
+    // Smoothed render clock: advances with the wall clock and is gently nudged
+    // toward (latestTick - INTERP_TICKS). Without it, bursty arrivals would make
+    // the picture speed up and slow down even though the server tick is steady.
+    let renderClockMs = 0;
+    let renderClockReady = false;
+
+    function advanceRenderClock(dtMs) {
+      const target = (latestTick - INTERP_TICKS) * TICK_MS;
+      if (!renderClockReady) {
+        renderClockMs = target;
+        renderClockReady = true;
+        return renderClockMs;
+      }
+      renderClockMs += dtMs;
+      const drift = target - renderClockMs;
+      if (drift > TICK_MS * 6) {
+        // Data jumped ahead (burst or reconnect): fast-forward at up to 2x
+        // instead of teleporting.
+        renderClockMs += Math.min(drift, dtMs);
+      } else {
+        // Stay locked to the data in both directions. A small pull-back is
+        // invisible; letting the clock run ahead is what makes dots slide
+        // through walls and then snap back.
+        renderClockMs += drift * Math.min(0.15, dtMs / 600);
+      }
+      return renderClockMs;
+    }
 
     // ---- Terrain cache -------------------------------------------------
     // The grid only changes when the server sends pixels, so the board is
@@ -654,6 +763,8 @@
       };
 
       ws.onmessage = (event) => {
+        diag.msgs++;
+        diag.lastMsgAt = performance.now();
         try {
           const msg = JSON.parse(event.data);
           handleServerMessage(msg);
@@ -696,10 +807,8 @@
           if (msg.players) {
             players.clear();
             msg.players.forEach(p => {
+              recordSnapshot(p, msg.tick || latestTick, p.x, p.y);
               players.set(p.id, p);
-              if (!prevPlayerPositions.has(p.id)) {
-                prevPlayerPositions.set(p.id, { x: p.x, y: p.y });
-              }
             });
           }
           if (msg.enemies) {
@@ -717,15 +826,14 @@
 
         case 13:
           if (msg.player) {
+            recordSnapshot(msg.player, latestTick, msg.player.x, msg.player.y);
             players.set(msg.player.id, msg.player);
-            prevPlayerPositions.set(msg.player.id, { x: msg.player.x, y: msg.player.y });
           }
           break;
 
         case 14:
           if (msg.playerId) {
             players.delete(msg.playerId);
-            prevPlayerPositions.delete(msg.playerId);
           }
           break;
 
@@ -815,7 +923,7 @@
       }
     }
 
-    function applyPlayers(list, compact) {
+    function applyPlayers(list, compact, tick) {
       for (let i = 0; i < list.length; i++) {
         const raw = list[i];
         const id = compact ? raw[0] : raw.id;
@@ -827,29 +935,33 @@
         if (!player) {
           player = { id, name: '', color: '', x: nextX, y: nextY, trail: [] };
           players.set(id, player);
-          prevPlayerPositions.set(id, { x: nextX, y: nextY });
         }
         player.x = nextX;
         player.y = nextY;
+        recordSnapshot(player, tick, nextX, nextY);
         if (trail !== null && trail !== undefined) {
           player.trail = compact ? unpackTrail(trail) : trail;
-        }
-        if (!prevPlayerPositions.has(id)) {
-          prevPlayerPositions.set(id, { x: nextX, y: nextY });
         }
       }
     }
 
-    function applyEnemies(list, compact) {
+    const ENEMY_HIST = [];
+
+    function applyEnemies(list, compact, tick) {
       if (!compact) {
         enemies = list;
-        return;
+      } else {
+        const out = [];
+        for (let i = 0; i < list.length; i += 2) {
+          out.push({ x: list[i], y: list[i + 1] });
+        }
+        enemies = out;
       }
-      const out = [];
-      for (let i = 0; i < list.length; i += 2) {
-        out.push({ x: list[i], y: list[i + 1] });
+      for (let i = 0; i < enemies.length; i++) {
+        if (!ENEMY_HIST[i]) ENEMY_HIST[i] = [];
+        pushSnapshot(ENEMY_HIST[i], tick, enemies[i].x, enemies[i].y);
       }
-      enemies = out;
+      ENEMY_HIST.length = enemies.length;
     }
 
     function applyRankings(list, compact) {
@@ -862,8 +974,8 @@
     function applyDelta(msg) {
       const compact = msg.cv === 2;
       if (msg.changes && msg.changes.length) applyChanges(msg.changes, compact);
-      if (msg.players) applyPlayers(msg.players, compact);
-      if (msg.enemies) applyEnemies(msg.enemies, compact);
+      if (msg.players) applyPlayers(msg.players, compact, msg.tick || latestTick);
+      if (msg.enemies) applyEnemies(msg.enemies, compact, msg.tick || latestTick);
       // Empty rankings arrive on most ticks; keep the last real leaderboard.
       if (msg.rankings && msg.rankings.length) applyRankings(msg.rankings, compact);
     }
@@ -1017,17 +1129,22 @@
     }
 
     let lastFrameTime = performance.now();
+    let lastRenderTick = 0;
     let lastHudDotColor = null;
 
     function render(now) {
-      const dt = Math.min(Math.max((now - lastFrameTime) / 1000, 0.001), 0.1);
+      const dtMs = Math.min(Math.max(now - lastFrameTime, 0), 200);
       lastFrameTime = now;
-      const interp = 1 - Math.exp(-dt * 20);
+      const renderTick = advanceRenderClock(dtMs) / TICK_MS;
+      lastRenderTick = renderTick;
 
       ctx.drawImage(terrainCanvas, 0, 0);
 
       players.forEach((player, id) => {
         const color = PLAYER_COLORS[player.id % PLAYER_COLORS.length];
+        const pos = samplePosition(player, renderTick);
+        const dotX = pos.x;
+        const dotY = pos.y;
 
         if (player.trail && player.trail.length > 0) {
           ctx.lineCap = 'round';
@@ -1037,7 +1154,7 @@
           for (let i = 1; i < player.trail.length; i++) {
             ctx.lineTo(player.trail[i].x, player.trail[i].y);
           }
-          ctx.lineTo(player.x, player.y);
+          ctx.lineTo(dotX, dotY);
           ctx.strokeStyle = hexToRgba(color, 0.35);
           ctx.lineWidth = 6;
           ctx.stroke();
@@ -1046,16 +1163,8 @@
           ctx.stroke();
         }
 
-        const prev = prevPlayerPositions.get(id) || { x: player.x, y: player.y };
-        // Teleports (respawn) should snap, not slide across the board.
-        const jx = player.x - prev.x;
-        const jy = player.y - prev.y;
-        if (jx * jx + jy * jy > 10000) {
-          prev.x = player.x;
-          prev.y = player.y;
-        }
-        const interpX = prev.x + (player.x - prev.x) * interp;
-        const interpY = prev.y + (player.y - prev.y) * interp;
+        const interpX = dotX;
+        const interpY = dotY;
 
         const glow = getGlow(color, id === myPlayerId ? 22 : 14);
         const half = glow.width / 2;
@@ -1079,23 +1188,24 @@
           ctx.stroke();
         }
 
-        prev.x = interpX;
-        prev.y = interpY;
-        prevPlayerPositions.set(id, prev);
       });
 
       const enemyGlow = getGlow(ENEMY_COLOR, 14);
       const enemyHalf = enemyGlow.width / 2;
-      enemies.forEach(enemy => {
-        ctx.drawImage(enemyGlow, enemy.x - enemyHalf, enemy.y - enemyHalf);
+      enemies.forEach((enemy, index) => {
+        const pos = sampleHistory(ENEMY_HIST[index], renderTick, enemy.x, enemy.y);
+        const ex = pos.x;
+        const ey = pos.y;
+
+        ctx.drawImage(enemyGlow, ex - enemyHalf, ey - enemyHalf);
 
         ctx.fillStyle = ENEMY_COLOR;
         ctx.beginPath();
-        ctx.arc(enemy.x, enemy.y, 5, 0, Math.PI * 2);
+        ctx.arc(ex, ey, 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
         ctx.beginPath();
-        ctx.arc(enemy.x - 1.5, enemy.y - 1.5, 2, 0, Math.PI * 2);
+        ctx.arc(ex - 1.5, ey - 1.5, 2, 0, Math.PI * 2);
         ctx.fill();
       });
 
@@ -1118,8 +1228,47 @@
       };
     }
 
+    // ---- on-screen diagnostics (?debug=0 to hide) ----
+    const diagEl = document.getElementById('debugHud');
+    const diag = { t0: performance.now(), frames: 0, maxGap: 0, stalls: 0, msgs: 0, lastMsgAt: 0, lastStall: 0, text: '' };
+    if (params.get('debug') !== '0' && diagEl) diagEl.classList.add('on');
+
+    function diagFrame(now, gap) {
+      diag.frames++;
+      if (gap > diag.maxGap) diag.maxGap = gap;
+      if (gap > 50) {
+        diag.stalls++;
+        diag.lastStall = Math.round(gap);
+        const msgAge = diag.lastMsgAt ? Math.round(performance.now() - diag.lastMsgAt) : -1;
+        console.warn(`[stall] ${Math.round(gap)}ms 距上条消息 ${msgAge}ms`);
+      }
+
+      const elapsed = now - diag.t0;
+      if (elapsed < 500 || !diagEl) return;
+
+      const fps = Math.round(diag.frames * 1000 / elapsed);
+      const msgAge = diag.lastMsgAt ? Math.round(performance.now() - diag.lastMsgAt) : -1;
+      const pingEl = document.getElementById('hudPing');
+      const text =
+        `FPS ${fps}  帧峰值 ${Math.round(diag.maxGap)}ms  卡顿 ${diag.stalls}\n` +
+        `消息 ${Math.round(diag.msgs * 1000 / elapsed)}/s  距上条 ${msgAge}ms  ping ${pingEl ? pingEl.textContent.trim() : '--'}` +
+        (diag.lastStall ? `\n最近卡顿 ${diag.lastStall}ms` : '');
+      if (text !== diag.text) {
+        diagEl.textContent = text;
+        diag.text = text;
+      }
+
+      diag.t0 = now;
+      diag.frames = 0;
+      diag.maxGap = 0;
+      diag.stalls = 0;
+      diag.msgs = 0;
+    }
+
     function gameLoop(now) {
+      const previous = lastFrameTime;
       render(now);
+      diagFrame(now, now - previous);
       requestAnimationFrame(gameLoop);
     }
 
