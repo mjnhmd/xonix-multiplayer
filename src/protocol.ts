@@ -152,6 +152,24 @@ export interface ServerDeltaMsg {
   rankings: RankEntry[];
 }
 
+// ---- 紧凑增量 (客户端带 ?v=2 时使用) ----
+// 玩家: [id, x, y, trailOrNull]，trail 为 [x1,y1,x2,y2,...]，null = 与上次相同
+export type CompactPlayer = [number, number, number, number[] | null];
+// 排行: [id, name, percent]
+export type CompactRankEntry = [number, string, number];
+
+export interface ServerCompactDeltaMsg {
+  type: ServerMsgType.DELTA;
+  cv: 2;
+  tick: number;
+  players: CompactPlayer[];
+  // [x1,y1,x2,y2,...]
+  enemies: number[];
+  // 游程编码: [x, y, runLength, owner, ...]
+  changes: number[];
+  rankings: CompactRankEntry[];
+}
+
 export interface ServerPlayerJoinedMsg {
   type: ServerMsgType.PLAYER_JOINED;
   player: PlayerInfo;

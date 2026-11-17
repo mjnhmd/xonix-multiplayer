@@ -532,6 +532,96 @@
 
     const prevPlayerPositions = new Map();
 
+    // ---- Terrain cache -------------------------------------------------
+    // The grid only changes when the server sends pixels, so the board is
+    // painted into an offscreen canvas and blitted instead of rebuilding a
+    // 800x600 ImageData on every animation frame.
+    const terrainCanvas = document.createElement('canvas');
+    terrainCanvas.width = GRID_WIDTH;
+    terrainCanvas.height = GRID_HEIGHT;
+    const terrainCtx = terrainCanvas.getContext('2d', { alpha: false });
+    const terrainImage = terrainCtx.createImageData(GRID_WIDTH, GRID_HEIGHT);
+    const terrainData = terrainImage.data;
+
+    const OWNER_RGB = new Uint8Array(256 * 3);
+    for (let id = 0; id < 256; id++) {
+      let r, g, b;
+      if (id === 0) {
+        r = 26; g = 26; b = 46;
+      } else if (id === 255) {
+        r = 55; g = 55; b = 65;
+      } else {
+        const rgb = hexToRgb(PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length]);
+        r = Math.floor(rgb.r * 0.55 + 20);
+        g = Math.floor(rgb.g * 0.55 + 20);
+        b = Math.floor(rgb.b * 0.55 + 20);
+      }
+      OWNER_RGB[id * 3] = r;
+      OWNER_RGB[id * 3 + 1] = g;
+      OWNER_RGB[id * 3 + 2] = b;
+    }
+
+    // Seed the board with the unclaimed colour so the first frames are not black.
+    for (let i = 0; i < GRID_WIDTH * GRID_HEIGHT; i++) paintCell(i, 0);
+    terrainCtx.putImageData(terrainImage, 0, 0);
+
+    let dirtyX0 = 0, dirtyY0 = 0, dirtyX1 = -1, dirtyY1 = -1;
+
+    function paintCell(index, ownerId) {
+      const src = ownerId * 3;
+      const dst = index * 4;
+      terrainData[dst] = OWNER_RGB[src];
+      terrainData[dst + 1] = OWNER_RGB[src + 1];
+      terrainData[dst + 2] = OWNER_RGB[src + 2];
+      terrainData[dst + 3] = 255;
+    }
+
+    function markDirty(index) {
+      const x = index % GRID_WIDTH;
+      const y = (index - x) / GRID_WIDTH;
+      if (x < dirtyX0) dirtyX0 = x;
+      if (x > dirtyX1) dirtyX1 = x;
+      if (y < dirtyY0) dirtyY0 = y;
+      if (y > dirtyY1) dirtyY1 = y;
+    }
+
+    function flushTerrain() {
+      if (dirtyX1 < dirtyX0 || dirtyY1 < dirtyY0) return;
+      terrainCtx.putImageData(
+        terrainImage, 0, 0,
+        dirtyX0, dirtyY0,
+        dirtyX1 - dirtyX0 + 1, dirtyY1 - dirtyY0 + 1
+      );
+      dirtyX0 = 0; dirtyY0 = 0; dirtyX1 = -1; dirtyY1 = -1;
+    }
+
+    // Neon glow without per-frame shadowBlur (canvas blur is very expensive).
+    const glowCache = new Map();
+    function getGlow(color, radius) {
+      const key = color + radius;
+      let sprite = glowCache.get(key);
+      if (!sprite) {
+        const size = Math.ceil(radius * 2);
+        sprite = document.createElement('canvas');
+        sprite.width = size;
+        sprite.height = size;
+        const g2d = sprite.getContext('2d');
+        const grad = g2d.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        grad.addColorStop(0, hexToRgba(color, 0.55));
+        grad.addColorStop(0.45, hexToRgba(color, 0.28));
+        grad.addColorStop(1, hexToRgba(color, 0));
+        g2d.fillStyle = grad;
+        g2d.fillRect(0, 0, size, size);
+        glowCache.set(key, sprite);
+      }
+      return sprite;
+    }
+
+    function hexToRgba(hex, alpha) {
+      const rgb = hexToRgb(hex);
+      return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+    }
+
     function resizeCanvas() {
       const scale = Math.min(
         window.innerWidth / GRID_WIDTH,
@@ -549,7 +639,7 @@
     function connectWebSocket() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
-      const wsUrl = `${protocol}//${host}/api/room/${roomId}/ws?name=${encodeURIComponent(playerName)}`;
+      const wsUrl = `${protocol}//${host}/api/room/${roomId}/ws?name=${encodeURIComponent(playerName)}&v=2`;
 
       ws = new WebSocket(wsUrl);
 
@@ -593,7 +683,12 @@
           if (msg.grid) {
             const decoded = atob(msg.grid);
             for (let i = 0; i < decoded.length; i++) {
-              grid[i] = decoded.charCodeAt(i);
+              const ownerId = decoded.charCodeAt(i);
+              if (grid[i] !== ownerId) {
+                grid[i] = ownerId;
+                paintCell(i, ownerId);
+                markDirty(i);
+              }
             }
           }
           if (msg.players) {
@@ -615,30 +710,7 @@
           break;
 
         case 12:
-          if (msg.changes) {
-            for (let i = 0; i < msg.changes.length; i += 3) {
-              const x = msg.changes[i];
-              const y = msg.changes[i + 1];
-              const ownerId = msg.changes[i + 2];
-              grid[y * GRID_WIDTH + x] = ownerId;
-            }
-          }
-          if (msg.players) {
-            msg.players.forEach(p => {
-              const existing = players.get(p.id);
-              if (existing) {
-                prevPlayerPositions.set(p.id, { x: existing.x, y: existing.y });
-              }
-              players.set(p.id, p);
-            });
-          }
-          if (msg.enemies) {
-            enemies = msg.enemies;
-          }
-          if (msg.rankings) {
-            rankings = msg.rankings;
-            updateLeaderboard();
-          }
+          applyDelta(msg);
           break;
 
         case 13:
@@ -675,6 +747,103 @@
           updateLeaderboard();
           break;
       }
+
+      flushTerrain();
+    }
+
+    function unpackTrail(flat) {
+      const trail = [];
+      for (let i = 0; i < flat.length; i += 2) {
+        trail.push({ x: flat[i], y: flat[i + 1] });
+      }
+      return trail;
+    }
+
+    function applyChanges(changes, compact) {
+      if (compact) {
+        // [x, y, runLength, owner, ...]
+        for (let i = 0; i < changes.length; i += 4) {
+          const x = changes[i];
+          const y = changes[i + 1];
+          const len = changes[i + 2];
+          const ownerId = changes[i + 3];
+          let index = y * GRID_WIDTH + x;
+          markDirty(index);
+          for (let k = 0; k < len; k++, index++) {
+            if (grid[index] !== ownerId) {
+              grid[index] = ownerId;
+              paintCell(index, ownerId);
+            }
+          }
+          markDirty(index - 1);
+        }
+        return;
+      }
+      // legacy: [x, y, owner, ...]
+      for (let i = 0; i < changes.length; i += 3) {
+        const x = changes[i];
+        const y = changes[i + 1];
+        const ownerId = changes[i + 2];
+        const index = y * GRID_WIDTH + x;
+        if (grid[index] !== ownerId) {
+          grid[index] = ownerId;
+          paintCell(index, ownerId);
+          markDirty(index);
+        }
+      }
+    }
+
+    function applyPlayers(list, compact) {
+      for (let i = 0; i < list.length; i++) {
+        const raw = list[i];
+        const id = compact ? raw[0] : raw.id;
+        const nextX = compact ? raw[1] : raw.x;
+        const nextY = compact ? raw[2] : raw.y;
+        const trail = compact ? raw[3] : raw.trail;
+
+        let player = players.get(id);
+        if (!player) {
+          player = { id, name: '', color: '', x: nextX, y: nextY, trail: [] };
+          players.set(id, player);
+          prevPlayerPositions.set(id, { x: nextX, y: nextY });
+        }
+        player.x = nextX;
+        player.y = nextY;
+        if (trail !== null && trail !== undefined) {
+          player.trail = compact ? unpackTrail(trail) : trail;
+        }
+        if (!prevPlayerPositions.has(id)) {
+          prevPlayerPositions.set(id, { x: nextX, y: nextY });
+        }
+      }
+    }
+
+    function applyEnemies(list, compact) {
+      if (!compact) {
+        enemies = list;
+        return;
+      }
+      const out = [];
+      for (let i = 0; i < list.length; i += 2) {
+        out.push({ x: list[i], y: list[i + 1] });
+      }
+      enemies = out;
+    }
+
+    function applyRankings(list, compact) {
+      rankings = compact
+        ? list.map(r => ({ id: r[0], name: r[1], percent: r[2] }))
+        : list;
+      updateLeaderboard();
+    }
+
+    function applyDelta(msg) {
+      const compact = msg.cv === 2;
+      if (msg.changes && msg.changes.length) applyChanges(msg.changes, compact);
+      if (msg.players) applyPlayers(msg.players, compact);
+      if (msg.enemies) applyEnemies(msg.enemies, compact);
+      // Empty rankings arrive on most ticks; keep the last real leaderboard.
+      if (msg.rankings && msg.rankings.length) applyRankings(msg.rankings, compact);
     }
 
     function sendInput(dir) {
@@ -749,36 +918,28 @@
 
     function updateLeaderboard() {
       const container = document.getElementById('leaderboardEntries');
-      container.innerHTML = '';
+
+      if (container.childElementCount !== rankings.length) {
+        container.innerHTML = '';
+        rankings.forEach(() => {
+          const div = document.createElement('div');
+          div.className = 'leaderboard-entry';
+          div.innerHTML =
+            '<div class="leaderboard-rank"></div>' +
+            '<div class="leaderboard-dot"></div>' +
+            '<div class="leaderboard-name"></div>' +
+            '<div class="leaderboard-area"></div>';
+          container.appendChild(div);
+        });
+      }
 
       rankings.forEach((entry, index) => {
-        const div = document.createElement('div');
-        div.className = 'leaderboard-entry';
-        if (entry.id === myPlayerId) {
-          div.classList.add('you');
-        }
-
-        const rank = document.createElement('div');
-        rank.className = 'leaderboard-rank';
-        rank.textContent = `${index + 1}.`;
-
-        const dot = document.createElement('div');
-        dot.className = 'leaderboard-dot';
-        dot.style.backgroundColor = entry.color || PLAYER_COLORS[entry.id % PLAYER_COLORS.length];
-
-        const name = document.createElement('div');
-        name.className = 'leaderboard-name';
-        name.textContent = entry.name;
-
-        const area = document.createElement('div');
-        area.className = 'leaderboard-area';
-        area.textContent = `${(entry.percent || 0).toFixed(1)}%`;
-
-        div.appendChild(rank);
-        div.appendChild(dot);
-        div.appendChild(name);
-        div.appendChild(area);
-        container.appendChild(div);
+        const div = container.children[index];
+        div.classList.toggle('you', entry.id === myPlayerId);
+        div.children[0].textContent = `${index + 1}.`;
+        div.children[1].style.backgroundColor = entry.color || PLAYER_COLORS[entry.id % PLAYER_COLORS.length];
+        div.children[2].textContent = entry.name;
+        div.children[3].textContent = `${(entry.percent || 0).toFixed(1)}%`;
       });
     }
 
@@ -833,41 +994,20 @@
       overlay.style.display = 'flex';
     }
 
-    function render() {
-      ctx.fillStyle = UNCLAIMED_COLOR;
-      ctx.fillRect(0, 0, GRID_WIDTH, GRID_HEIGHT);
+    let lastFrameTime = performance.now();
+    let lastHudDotColor = null;
 
-      const imageData = ctx.createImageData(GRID_WIDTH, GRID_HEIGHT);
-      const data = imageData.data;
+    function render(now) {
+      const dt = Math.min(Math.max((now - lastFrameTime) / 1000, 0.001), 0.1);
+      lastFrameTime = now;
+      const interp = 1 - Math.exp(-dt * 20);
 
-      for (let i = 0; i < grid.length; i++) {
-        const ownerId = grid[i];
-        const idx = i * 4;
-
-        if (ownerId === 0) {
-          data[idx] = 26; data[idx + 1] = 26; data[idx + 2] = 46; data[idx + 3] = 255;
-        } else if (ownerId === 255) {
-          data[idx] = 55; data[idx + 1] = 55; data[idx + 2] = 65; data[idx + 3] = 255;
-        } else {
-          const rgb = hexToRgb(PLAYER_COLORS[(ownerId - 1) % PLAYER_COLORS.length]);
-          data[idx] = Math.floor(rgb.r * 0.55 + 20);
-          data[idx + 1] = Math.floor(rgb.g * 0.55 + 20);
-          data[idx + 2] = Math.floor(rgb.b * 0.55 + 20);
-          data[idx + 3] = 255;
-        }
-      }
-
-      ctx.putImageData(imageData, 0, 0);
+      ctx.drawImage(terrainCanvas, 0, 0);
 
       players.forEach((player, id) => {
         const color = PLAYER_COLORS[player.id % PLAYER_COLORS.length];
-        
+
         if (player.trail && player.trail.length > 0) {
-          ctx.save();
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 6;
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 2;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           ctx.beginPath();
@@ -876,23 +1016,33 @@
             ctx.lineTo(player.trail[i].x, player.trail[i].y);
           }
           ctx.lineTo(player.x, player.y);
+          ctx.strokeStyle = hexToRgba(color, 0.35);
+          ctx.lineWidth = 6;
           ctx.stroke();
-          ctx.restore();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
         }
 
         const prev = prevPlayerPositions.get(id) || { x: player.x, y: player.y };
-        const alpha = 0.3;
-        const interpX = prev.x + (player.x - prev.x) * alpha;
-        const interpY = prev.y + (player.y - prev.y) * alpha;
+        // Teleports (respawn) should snap, not slide across the board.
+        const jx = player.x - prev.x;
+        const jy = player.y - prev.y;
+        if (jx * jx + jy * jy > 10000) {
+          prev.x = player.x;
+          prev.y = player.y;
+        }
+        const interpX = prev.x + (player.x - prev.x) * interp;
+        const interpY = prev.y + (player.y - prev.y) * interp;
 
-        ctx.save();
-        ctx.shadowColor = color;
-        ctx.shadowBlur = id === myPlayerId ? 16 : 8;
+        const glow = getGlow(color, id === myPlayerId ? 22 : 14);
+        const half = glow.width / 2;
+        ctx.drawImage(glow, interpX - half, interpY - half);
+
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
         ctx.arc(interpX, interpY, 4, 0, Math.PI * 2);
         ctx.fill();
-        ctx.restore();
 
         ctx.fillStyle = color;
         ctx.beginPath();
@@ -900,24 +1050,23 @@
         ctx.fill();
 
         if (id === myPlayerId) {
-          ctx.save();
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
           ctx.lineWidth = 1;
-          ctx.shadowColor = '#ffffff';
-          ctx.shadowBlur = 6;
           ctx.beginPath();
           ctx.arc(interpX, interpY, 7, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.restore();
         }
 
-        prevPlayerPositions.set(id, { x: interpX, y: interpY });
+        prev.x = interpX;
+        prev.y = interpY;
+        prevPlayerPositions.set(id, prev);
       });
 
+      const enemyGlow = getGlow(ENEMY_COLOR, 14);
+      const enemyHalf = enemyGlow.width / 2;
       enemies.forEach(enemy => {
-        ctx.save();
-        ctx.shadowColor = ENEMY_COLOR;
-        ctx.shadowBlur = 10;
+        ctx.drawImage(enemyGlow, enemy.x - enemyHalf, enemy.y - enemyHalf);
+
         ctx.fillStyle = ENEMY_COLOR;
         ctx.beginPath();
         ctx.arc(enemy.x, enemy.y, 5, 0, Math.PI * 2);
@@ -926,13 +1075,15 @@
         ctx.beginPath();
         ctx.arc(enemy.x - 1.5, enemy.y - 1.5, 2, 0, Math.PI * 2);
         ctx.fill();
-        ctx.restore();
       });
 
       const me = players.get(myPlayerId);
       if (me) {
         const myColor = PLAYER_COLORS[me.id % PLAYER_COLORS.length];
-        document.getElementById('hudPlayerDot').style.backgroundColor = myColor;
+        if (myColor !== lastHudDotColor) {
+          document.getElementById('hudPlayerDot').style.backgroundColor = myColor;
+          lastHudDotColor = myColor;
+        }
       }
     }
 
@@ -945,13 +1096,13 @@
       };
     }
 
-    function gameLoop() {
-      render();
+    function gameLoop(now) {
+      render(now);
       requestAnimationFrame(gameLoop);
     }
 
     connectWebSocket();
-    gameLoop();
+    requestAnimationFrame(gameLoop);
   </script>
 </body>
 </html>

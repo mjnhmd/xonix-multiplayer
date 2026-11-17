@@ -2,7 +2,7 @@ import {
   GAME_W, GAME_H, BORDER, PLAYER_SPEED, PLAYER_RADIUS,
   ENEMY_RADIUS, ENEMY_SPEED, ENEMY_COUNT, MAX_PLAYERS,
   Direction, PlayerState, dirToDelta, oppositeDir,
-  type PlayerInfo, type EnemyInfo, type RankEntry,
+  type PlayerInfo, type EnemyInfo, type RankEntry, type CompactPlayer,
   PLAYER_COLORS, PLAYER_COLOR_NAMES, WIN_PERCENT,
 } from './protocol';
 
@@ -689,6 +689,57 @@ export class GameEngine {
 
   getChangedPixels(): number[] {
     return this.changedPixels;
+  }
+
+  // Run-length encoded changes: [x, y, runLength, owner, ...].
+  // Captures are written row-major, so whole spans collapse into one entry.
+  getChangedRuns(): number[] {
+    const px = this.changedPixels;
+    const runs: number[] = [];
+    let rx = -1, ry = -1, rlen = 0, rowner = -1;
+    for (let i = 0; i < px.length; i += 3) {
+      const x = px[i], y = px[i + 1], owner = px[i + 2];
+      if (rlen > 0 && owner === rowner && y === ry && x === rx + rlen) {
+        rlen++;
+      } else {
+        if (rlen > 0) runs.push(rx, ry, rlen, rowner);
+        rx = x; ry = y; rlen = 1; rowner = owner;
+      }
+    }
+    if (rlen > 0) runs.push(rx, ry, rlen, rowner);
+    return runs;
+  }
+
+  // Compact per-tick players: [id, x, y, trailOrNull, ...].
+  // A null trail means "unchanged since the last broadcast"; the client keeps
+  // its copy. Trails only actually change when a player turns or resets.
+  getCompactPlayers(lastTrailSig: Map<number, string>): CompactPlayer[] {
+    const out: CompactPlayer[] = [];
+    for (const p of this.players.values()) {
+      const t = p.trail;
+      let sig: string;
+      if (t.length === 0) {
+        sig = 'E';
+      } else {
+        const f = t[0];
+        const l = t[t.length - 1];
+        sig = `${t.length}|${Math.round(f.x)},${Math.round(f.y)}|${Math.round(l.x)},${Math.round(l.y)}`;
+      }
+      let flat: number[] | null = null;
+      if (lastTrailSig.get(p.id) !== sig) {
+        lastTrailSig.set(p.id, sig);
+        flat = [];
+        for (const pt of t) flat.push(Math.round(pt.x), Math.round(pt.y));
+      }
+      out.push([p.id, Math.round(p.x), Math.round(p.y), flat]);
+    }
+    return out;
+  }
+
+  getCompactEnemies(): number[] {
+    const out: number[] = [];
+    for (const e of this.enemies) out.push(Math.round(e.x), Math.round(e.y));
+    return out;
   }
 
   getPlayerInfo(p: ServerPlayer): PlayerInfo {

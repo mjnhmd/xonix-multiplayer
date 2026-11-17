@@ -47,7 +47,8 @@ export default {
           return new Response('Expected WebSocket', { status: 426 });
         }
         const name = url.searchParams.get('name') || '';
-        return room.fetch(new Request(new URL(`/ws?name=${encodeURIComponent(name)}`, url.origin), {
+        const v = url.searchParams.get('v') || '';
+        return room.fetch(new Request(new URL(`/ws?name=${encodeURIComponent(name)}&v=${encodeURIComponent(v)}`, url.origin), {
           headers: request.headers,
         }));
       }

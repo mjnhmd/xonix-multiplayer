@@ -4,7 +4,8 @@ import { generateBotName, updateBot } from './bot';
 import {
   MAX_PLAYERS, TICK_MS,
   ClientMsgType, ServerMsgType,
-  type ClientMsg, type ServerGameStateMsg, type ServerDeltaMsg,
+  type ClientMsg, type ServerGameStateMsg, type ServerDeltaMsg, type ServerCompactDeltaMsg,
+  type CompactRankEntry,
   type ServerMsg, type PlayerInfo,
 } from './protocol';
 
@@ -16,6 +17,7 @@ interface Env {
 interface ConnectionMeta {
   playerId: number;
   name: string;
+  compact?: boolean;
 }
 
 export class GameRoom extends DurableObject<Env> {
@@ -56,7 +58,11 @@ export class GameRoom extends DurableObject<Env> {
         return new Response('Room is full', { status: 503 });
       }
 
-      const meta: ConnectionMeta = { playerId: slotId, name };
+      const meta: ConnectionMeta = {
+        playerId: slotId,
+        name,
+        compact: url.searchParams.get('v') === '2',
+      };
       this.ctx.acceptWebSocket(server);
       server.serializeAttachment(meta);
       this.playerSlots[slotId] = meta;
@@ -320,6 +326,32 @@ export class GameRoom extends DurableObject<Env> {
 
     const includeRankings = this.broadcastCounter % 10 === 0;
 
+    let compactData: string | null = null;
+    let legacyData: string | null = null;
+
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        const sentAt = this.fullStateSentAt.get(ws);
+        // Full snapshots are ~640KB; the socket is ordered and reliable, so a
+        // periodic one is only a safety net against client-side drift.
+        if (!sentAt || this.engine.tick - sentAt > 3000) {
+          this.sendFullState(ws);
+          continue;
+        }
+        const meta = ws.deserializeAttachment() as ConnectionMeta | null;
+        if (meta && meta.compact) {
+          if (compactData === null) compactData = this.buildCompactDelta(includeRankings);
+          ws.send(compactData);
+        } else {
+          if (legacyData === null) legacyData = this.buildLegacyDelta(includeRankings);
+          ws.send(legacyData);
+        }
+      } catch {
+      }
+    }
+  }
+
+  private buildLegacyDelta(includeRankings: boolean): string {
     const delta: ServerDeltaMsg = {
       type: ServerMsgType.DELTA,
       tick: this.engine.tick,
@@ -328,24 +360,36 @@ export class GameRoom extends DurableObject<Env> {
       changes: this.engine.getChangedPixels(),
       rankings: includeRankings ? this.engine.getRankings() : [],
     };
-    const data = JSON.stringify(delta);
+    return JSON.stringify(delta);
+  }
 
-    for (const ws of this.ctx.getWebSockets()) {
-      try {
-        const sentAt = this.fullStateSentAt.get(ws);
-        if (!sentAt || this.engine.tick - sentAt > 400) {
-          this.sendFullState(ws);
-        } else {
-          ws.send(data);
-        }
-      } catch {
-      }
-    }
+  private compactTrailSig: Map<number, string> = new Map();
+
+  private buildCompactDelta(includeRankings: boolean): string {
+    const rankings: CompactRankEntry[] = includeRankings
+      ? this.engine.getRankings().map(
+        (r) => [r.id, r.name, Math.round(r.percent * 10) / 10] as CompactRankEntry
+      )
+      : [];
+
+    const delta: ServerCompactDeltaMsg = {
+      type: ServerMsgType.DELTA,
+      cv: 2,
+      tick: this.engine.tick,
+      players: this.engine.getCompactPlayers(this.compactTrailSig),
+      enemies: this.engine.getCompactEnemies(),
+      changes: this.engine.getChangedRuns(),
+      rankings,
+    };
+    return JSON.stringify(delta);
   }
 
   private broadcastPlayerJoined(playerId: number): void {
     const p = this.engine.players.get(playerId);
     if (!p) return;
+    // Slot reuse must not inherit the previous occupant's trail signature.
+    this.compactTrailSig.delete(playerId);
+
     const msg: ServerMsg = {
       type: ServerMsgType.PLAYER_JOINED,
       player: this.engine.getPlayerInfo(p),
