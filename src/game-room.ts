@@ -309,14 +309,25 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   private sendFullState(ws: WebSocket): void {
-    const msg: ServerGameStateMsg = {
-      type: ServerMsgType.GAME_STATE,
-      tick: this.engine.tick,
-      players: this.engine.getAllPlayerInfos(),
-      enemies: this.engine.getEnemyInfos(),
-      grid: this.engine.encodeGrid(),
-      rankings: this.engine.getRankings(),
-    };
+    const meta = ws.deserializeAttachment() as ConnectionMeta | null;
+    const msg: ServerGameStateMsg = meta && meta.compact
+      ? {
+        type: ServerMsgType.GAME_STATE,
+        tick: this.engine.tick,
+        players: this.engine.getAllPlayerInfos(),
+        enemies: this.engine.getEnemyInfos(),
+        grid: '',
+        gridRuns: this.engine.encodeGridRuns(),
+        rankings: this.engine.getRankings(),
+      }
+      : {
+        type: ServerMsgType.GAME_STATE,
+        tick: this.engine.tick,
+        players: this.engine.getAllPlayerInfos(),
+        enemies: this.engine.getEnemyInfos(),
+        grid: this.engine.encodeGrid(),
+        rankings: this.engine.getRankings(),
+      };
     ws.send(JSON.stringify(msg));
     this.fullStateSentAt.set(ws, this.engine.tick);
   }

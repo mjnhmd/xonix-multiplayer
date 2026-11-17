@@ -784,4 +784,25 @@ export class GameEngine {
     }
     return btoa(chunks.join(''));
   }
+
+  // Run-length encoded whole grid: [x, y, runLength, owner, ...].
+  // ~10x smaller than the base64 byte dump for a typical board.
+  encodeGridRuns(): number[] {
+    const runs: number[] = [];
+    const g = this.grid;
+    let ry = -1, rx = -1, rlen = 0, rowner = -1;
+    for (let i = 0; i < g.length; i++) {
+      const owner = g[i];
+      const y = (i / GAME_W) | 0;
+      const x = i - y * GAME_W;
+      if (rlen > 0 && owner === rowner && y === ry && x === rx + rlen) {
+        rlen++;
+      } else {
+        if (rlen > 0) runs.push(rx, ry, rlen, rowner);
+        rx = x; ry = y; rlen = 1; rowner = owner;
+      }
+    }
+    if (rlen > 0) runs.push(rx, ry, rlen, rowner);
+    return runs;
+  }
 }

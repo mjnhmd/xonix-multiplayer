@@ -139,6 +139,8 @@ export interface ServerGameStateMsg {
   enemies: EnemyInfo[];
   // grid 用 base64 编码的 Uint8Array，每字节 = ownerPlayerId (0=无人, 1-8=玩家slot+1)
   grid: string;
+  // 紧凑客户端使用：游程编码 [x, y, runLength, owner, ...] 代替 grid
+  gridRuns?: number[];
   rankings: RankEntry[];
 }
 

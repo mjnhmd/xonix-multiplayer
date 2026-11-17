@@ -680,7 +680,9 @@
           break;
 
         case 11:
-          if (msg.grid) {
+          if (msg.gridRuns) {
+            applyGridRuns(msg.gridRuns);
+          } else if (msg.grid) {
             const decoded = atob(msg.grid);
             for (let i = 0; i < decoded.length; i++) {
               const ownerId = decoded.charCodeAt(i);
@@ -757,6 +759,26 @@
         trail.push({ x: flat[i], y: flat[i + 1] });
       }
       return trail;
+    }
+
+    // Full board from run-length encoded spans; every cell is rewritten, so the
+    // whole texture is flushed once.
+    function applyGridRuns(runs) {
+      for (let i = 0; i < runs.length; i += 4) {
+        const x = runs[i];
+        const y = runs[i + 1];
+        const len = runs[i + 2];
+        const ownerId = runs[i + 3];
+        let index = y * GRID_WIDTH + x;
+        for (let k = 0; k < len; k++, index++) {
+          grid[index] = ownerId;
+          paintCell(index, ownerId);
+        }
+      }
+      dirtyX0 = 0;
+      dirtyY0 = 0;
+      dirtyX1 = GRID_WIDTH - 1;
+      dirtyY1 = GRID_HEIGHT - 1;
     }
 
     function applyChanges(changes, compact) {
